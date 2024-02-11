@@ -11,7 +11,7 @@ image:
   pullPolicy: IfNotPresent
 
 # Which application workers to run
-workers: "bench,basic,basic-act"
+workers: "bench,basic,basic-act,session-cpu"
 
 tests:
   namespaceName: benchtest
@@ -30,6 +30,8 @@ tests:
   clientCertPrivateKeyData: ""
 
   enableHostVerification: false
+  tmpDir:
+    sizeLimit: 200M
 
 imagePullSecrets: []
 nameOverride: ""

@@ -1,0 +1,17 @@
+{
+    "steps": [{
+        "count": 100,
+        "concurrency": 2
+    }],
+    "workflow": {
+        "name": "session-cpu",
+        "taskQueue": "temporal-session-cpu",
+        "args": {
+            "min_byte_file_size": 800000,
+            "max_byte_file_size": 4000000,
+            "cores_count": 1,
+            "cpu_time": "20s",
+            "cpu_percentage": 50
+        }
+    }
+}
