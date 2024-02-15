@@ -11,7 +11,8 @@ k8s_yaml(helm('helm-chart',
     set=[
        'image.repository=ghcr.io/bjet007/temporal-bench',
        'workers=bench\\,basic\\,session-cpu',
-       'tests.numDecisionPollers=20',
+       'replicaCount=2',
+       'tests.numDecisionPollers=2',
        'tests.frontendAddress=temporal-frontend.temporal:7233',
        'tests.prometheusURL=http://prometheus-kube-prometheus-prometheus.monitoring:9090'
     ],

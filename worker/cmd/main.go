@@ -36,6 +36,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/temporalio/maru/bench"
+	"github.com/temporalio/maru/target/basic"
 	"github.com/temporalio/maru/target/fileparameter"
 	"github.com/temporalio/maru/target/fileparameter/activities"
 	"go.temporal.io/api/serviceerror"
@@ -45,9 +48,6 @@ import (
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 	"go.uber.org/zap"
-
-	"github.com/temporalio/maru/bench"
-	"github.com/temporalio/maru/target/basic"
 
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/uber-go/tally/v4"
@@ -271,16 +271,39 @@ func constructBasicActWorker(ctx context.Context, serviceClient client.Client, l
 }
 
 func constructSessionWorker(ctx context.Context, serviceClient client.Client, logger *zap.Logger, taskQueue string) worker.Worker {
+
+	// struct method activities: some setup required
+	workDirActivity := &activities.WorkDir{
+		HostTaskQueue: uuid.New().String(),
+		BaseDir:       "/work/tmp",
+	}
+
+	//
+	hostOptions := buildWorkerOptions(ctx, logger)
+	hostOptions.EnableSessionWorker = true
+	hostWorker := worker.New(serviceClient, workDirActivity.HostTaskQueue, hostOptions)
+	hostWorker.RegisterActivityWithOptions(workDirActivity.CleanupWorkDir, activity.RegisterOptions{
+		Name: "CleanupWorkDir",
+	})
+	// Given how the construct is done without handle error, use non-blocking start for this demo
+	err := hostWorker.Start()
+	if err != nil {
+		logger.Fatal("Unable to start host worker ", zap.Error(err))
+	}
+	// Shared Task Queue
 	options := buildWorkerOptions(ctx, logger)
 	options.EnableSessionWorker = true
+	options.MaxConcurrentWorkflowTaskExecutionSize = 2 // minimum number allowed by Temporal
+	options.MaxConcurrentActivityExecutionSize = 2     // to limit the number of (CPU intensive) process running concurrently
+	options.MaxConcurrentSessionExecutionSize = 10
 
 	w := worker.New(serviceClient, taskQueue, options)
 	runOD := &fileparameter.RunWorkflow{
-		ExecutionTimeout:        10 * time.Minute,
+		ExecutionTimeout:        20 * time.Minute,
 		SessionCreationTimeout:  time.Minute,
-		SessionRetryInterval:    time.Minute,
-		SessionMaxAttempts:      3,
-		SessionHeartbeatTimeout: time.Minute,
+		SessionRetryInterval:    20 * time.Second,
+		SessionMaxAttempts:      20,
+		SessionHeartbeatTimeout: 30 * time.Second,
 	}
 
 	w.RegisterWorkflowWithOptions(
@@ -289,10 +312,7 @@ func constructSessionWorker(ctx context.Context, serviceClient client.Client, lo
 	)
 
 	// struct method activities: some setup required
-	createWorkDir := &activities.CreateWorkDir{
-		BaseDir: "/work/tmp",
-	}
-	w.RegisterActivity(createWorkDir)
+	w.RegisterActivity(workDirActivity)
 	w.RegisterActivity(activities.ProcessData)
 	w.RegisterActivity(activities.GenerateData)
 	w.RegisterActivity(&activities.Upload{BlobStore: &activities.BlobStore{}})

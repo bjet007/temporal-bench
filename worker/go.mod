@@ -3,6 +3,7 @@ module github.com/temporalio/maru
 go 1.21
 
 require (
+	github.com/google/uuid v1.3.0
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.11.1
 	github.com/prometheus/common v0.26.0
@@ -25,7 +26,6 @@ require (
 	github.com/gogo/status v1.1.1 // indirect
 	github.com/golang/mock v1.6.0 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
-	github.com/google/uuid v1.3.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway v1.16.0 // indirect
 	github.com/json-iterator/go v1.1.11 // indirect

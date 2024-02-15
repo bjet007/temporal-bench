@@ -79,8 +79,8 @@ type RunWorkflow struct {
 // ProcessingWorkflow workflow definition
 func (wf *RunWorkflow) ProcessingWorkflow(ctx workflow.Context, request WorkflowRequest) (err error) {
 	ao := workflow.ActivityOptions{
-		StartToCloseTimeout: time.Minute,
-		HeartbeatTimeout:    2 * time.Second, // such a short timeout to make sample fail over very fast
+		StartToCloseTimeout: 2 * time.Minute,
+		HeartbeatTimeout:    4 * time.Second, // such a short timeout to make sample fail over very fast
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:    time.Second,
 			BackoffCoefficient: 2.0,
@@ -88,32 +88,39 @@ func (wf *RunWorkflow) ProcessingWorkflow(ctx workflow.Context, request Workflow
 		},
 	}
 	ctx = workflow.WithActivityOptions(ctx, ao)
-	executionInfo := workflow.GetInfo(ctx).WorkflowExecution
+
 	// Retry the whole sequence from the first activity on any error
 	// to retry it on a different host. In a real application it might be reasonable to
 	// retry individual activities as well as the whole sequence discriminating between different types of errors.
 	// See the retryactivity sample for a more sophisticated retry implementation.
-	for i := 1; i < 5; i++ {
+	for i := 1; i < wf.SessionMaxAttempts; i++ {
+		executionInfo := workflow.GetInfo(ctx).WorkflowExecution
 		err = wf.processFile(ctx, executionInfo, request)
-		if err == nil {
-			break
+		if errors.Is(err, ErrSessionHostDown) {
+			if sleepErr := workflow.Sleep(ctx, wf.SessionRetryInterval); sleepErr != nil {
+				return sleepErr
+			}
+			continue
 		}
-	}
-	if err != nil {
-		workflow.GetLogger(ctx).Error("Workflow failed.", "Error", err.Error())
-	} else {
-		workflow.GetLogger(ctx).Info("Workflow completed.")
+		if err != nil {
+			workflow.GetLogger(ctx).Error("Workflow failed.", "Error", err.Error())
+		} else {
+			workflow.GetLogger(ctx).Info("Workflow completed.")
+		}
+		return err
 	}
 	return err
 }
 
 func (wf *RunWorkflow) processFile(ctx workflow.Context, executionInfo workflow.Execution, request WorkflowRequest) (err error) {
+	workflowLogger := workflow.GetLogger(ctx)
+
 	sessionCtx, err := workflow.CreateSession(ctx, &workflow.SessionOptions{
 		CreationTimeout:  wf.SessionCreationTimeout,
 		ExecutionTimeout: wf.ExecutionTimeout,
 		HeartbeatTimeout: wf.SessionHeartbeatTimeout, // we rely purely on session heartbeats to catch a worker instance going down
 	})
-	logger := workflow.GetLogger(sessionCtx)
+
 	if err != nil {
 		err = fmt.Errorf("creating Temporal session: %w", err)
 		if temporal.IsTimeoutError(err) {
@@ -122,6 +129,9 @@ func (wf *RunWorkflow) processFile(ctx workflow.Context, executionInfo workflow.
 		}
 		return err
 	}
+
+	var workDir activities.CreateWorkDirResult
+
 	defer func() {
 		workflow.CompleteSession(sessionCtx)
 		if workflow.GetSessionInfo(sessionCtx).SessionState == workflow.SessionStateFailed {
@@ -131,12 +141,21 @@ func (wf *RunWorkflow) processFile(ctx workflow.Context, executionInfo workflow.
 	}()
 
 	// prepare context
-	workDir, err := wf.createWorkDir(sessionCtx, activities.CreateWorkDirArgs{})
+	workDir, err = wf.createWorkDir(sessionCtx, activities.CreateWorkDirArgs{})
 	if err != nil {
 		return err
 	}
 	// Expected Session will leak file on disk, until cleanup activities is implemented
-	// defer cleanupWorkDir()
+	defer func() {
+		cleanupCtx, _ := workflow.NewDisconnectedContext(ctx)
+		_, cleanupErr := wf.cleanupWorkDir(cleanupCtx, activities.CleanupWorkDirArgs{
+			Root:          workDir.Root,
+			HostTaskQueue: workDir.HostTaskQueue,
+		})
+		if cleanupErr != nil {
+			workflowLogger.Warn("Workflow Cleanup failed...", "Error", cleanupErr)
+		}
+	}()
 
 	_, err = wf.generateData(sessionCtx, activities.GenerateDataParams{
 		ContextDir:  workDir.ContextDir,
@@ -164,19 +183,33 @@ func (wf *RunWorkflow) processFile(ctx workflow.Context, executionInfo workflow.
 		return err
 	}
 
-	logger.Info("Workflow Completed...", "file", result.ResultLocation)
+	workflowLogger.Info("Workflow Completed...", "file", result.ResultLocation)
 	return err
 }
 
-func (wf *RunWorkflow) createWorkDir(ctx workflow.Context, args activities.CreateWorkDirArgs) (result activities.CreateWorkDirResult, err error) {
+func (wf *RunWorkflow) createWorkDir(ctx workflow.Context, args activities.CreateWorkDirArgs) (activities.CreateWorkDirResult, error) {
 	activityCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: shortActivityTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: maxAttempts},
 	})
-	var a activities.CreateWorkDir
+	var a *activities.WorkDir
 	f := workflow.ExecuteActivity(activityCtx, a.CreateWorkDir, args)
-
+	var result activities.CreateWorkDirResult
 	return result, f.Get(ctx, &result)
+}
+
+func (wf *RunWorkflow) cleanupWorkDir(cleanupCtx workflow.Context, args activities.CleanupWorkDirArgs) (result activities.CleanupWorkDirResult, err error) {
+	// Cleanup Timeout what do we do.
+	var a *activities.WorkDir
+
+	activityCtx := workflow.WithActivityOptions(cleanupCtx, workflow.ActivityOptions{
+		StartToCloseTimeout:    shortActivityTimeout,
+		ScheduleToCloseTimeout: 20 * time.Second,
+		TaskQueue:              args.HostTaskQueue,
+	})
+
+	f := workflow.ExecuteActivity(activityCtx, a.CleanupWorkDir, args)
+	return result, f.Get(cleanupCtx, &result)
 }
 
 func (wf *RunWorkflow) generateData(ctx workflow.Context, args activities.GenerateDataParams) (result activities.GenerateDataResult, err error) {

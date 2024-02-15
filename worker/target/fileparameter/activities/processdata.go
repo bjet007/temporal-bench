@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"io"
+	math_rand "math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
 
+	"github.com/pkg/errors"
 	"go.temporal.io/sdk/activity"
 )
 
@@ -51,6 +53,10 @@ func ProcessData(ctx context.Context, args ProcessDataParams) (*ProcessDataResul
 	if err != nil {
 		logger.Error("generateActivity failed to save tmp file.", "Error", err, "ResultDir", args.ResultDir)
 		return nil, err
+	}
+	math_rand.Intn(100)
+	if math_rand.Intn(100) < 10 {
+		return nil, errors.New("Process Crash")
 	}
 	return &ProcessDataResult{}, nil
 }
