@@ -293,7 +293,7 @@ func constructSessionWorker(ctx context.Context, serviceClient client.Client, lo
 	// Shared Task Queue
 	options := buildWorkerOptions(ctx, logger)
 	options.EnableSessionWorker = true
-	options.MaxConcurrentWorkflowTaskExecutionSize = 2 // minimum number allowed by Temporal
+	options.MaxConcurrentWorkflowTaskExecutionSize = 1000 // minimum number allowed by Temporal
 	options.MaxConcurrentActivityExecutionSize = 1000  // to limit the number of (CPU intensive) process running concurrently
 	options.MaxConcurrentSessionExecutionSize = 100
 
