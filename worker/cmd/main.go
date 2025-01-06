@@ -294,8 +294,8 @@ func constructSessionWorker(ctx context.Context, serviceClient client.Client, lo
 	options := buildWorkerOptions(ctx, logger)
 	options.EnableSessionWorker = true
 	options.MaxConcurrentWorkflowTaskExecutionSize = 2 // minimum number allowed by Temporal
-	options.MaxConcurrentActivityExecutionSize = 2     // to limit the number of (CPU intensive) process running concurrently
-	options.MaxConcurrentSessionExecutionSize = 10
+	options.MaxConcurrentActivityExecutionSize = 1000  // to limit the number of (CPU intensive) process running concurrently
+	options.MaxConcurrentSessionExecutionSize = 100
 
 	w := worker.New(serviceClient, taskQueue, options)
 	runOD := &fileparameter.RunWorkflow{

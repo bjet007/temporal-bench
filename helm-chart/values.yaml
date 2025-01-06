@@ -6,8 +6,8 @@ replicaCount: 1
 
 image:
   # Build your Maru image based on worker/Dockerfile and put its name and tag below
-  repository: ghcr.io/temporalio/maru
-  tag: latest
+  repository: ghcr.io/bjet007/temporal-bench
+  tag: session_file
   pullPolicy: IfNotPresent
 
 # Which application workers to run
