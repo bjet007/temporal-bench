@@ -69,6 +69,13 @@ spec:
               value: "{{ .Values.workers }}"
             - name: PROMETHEUS_URL
               value: "{{ .Values.tests.prometheusURL }}"
+          volumeMounts:
+            - name: workflow-tmp-dir
+              mountPath: /work/tmp
+      volumes:
+        - name: workflow-tmp-dir
+          emptyDir:
+            sizeLimit: "{{ .Values.tests.tmpDir.sizeLimit }}"
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

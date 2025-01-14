@@ -36,6 +36,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/temporalio/maru/bench"
+	"github.com/temporalio/maru/target/basic"
+	"github.com/temporalio/maru/target/fileparameter"
+	"github.com/temporalio/maru/target/fileparameter/activities"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/activity"
@@ -43,9 +48,6 @@ import (
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 	"go.uber.org/zap"
-
-	"github.com/temporalio/maru/bench"
-	"github.com/temporalio/maru/target/basic"
 
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/uber-go/tally/v4"
@@ -201,7 +203,7 @@ func startWorkers(
 		logger.Fatal("failed to build temporal client", zap.Error(err))
 	}
 
-	workersString := getEnvOrDefaultString(logger, "RUN_WORKERS", "bench,basic,basic-act")
+	workersString := getEnvOrDefaultString(logger, "RUN_WORKERS", "bench,basic,basic-act,session-cpu")
 	workers := strings.Split(workersString, ",")
 
 	for _, workerName := range workers {
@@ -213,6 +215,8 @@ func startWorkers(
 			worker = constructBasicWorker(context.Background(), serviceClient, logger, "temporal-basic")
 		case "basic-act":
 			worker = constructBasicActWorker(context.Background(), serviceClient, logger, "temporal-basic-act")
+		case "session-cpu":
+			worker = constructSessionWorker(context.Background(), serviceClient, logger, "temporal-session-cpu")
 		default:
 			panic(fmt.Sprintf("unknown worker %q", worker))
 		}
@@ -263,6 +267,56 @@ func constructBasicWorker(ctx context.Context, serviceClient client.Client, logg
 func constructBasicActWorker(ctx context.Context, serviceClient client.Client, logger *zap.Logger, taskQueue string) worker.Worker {
 	w := worker.New(serviceClient, taskQueue, buildWorkerOptions(ctx, logger))
 	w.RegisterActivityWithOptions(basic.Activity, activity.RegisterOptions{Name: "basic-activity"})
+	return w
+}
+
+func constructSessionWorker(ctx context.Context, serviceClient client.Client, logger *zap.Logger, taskQueue string) worker.Worker {
+
+	// struct method activities: some setup required
+	workDirActivity := &activities.WorkDir{
+		HostTaskQueue: uuid.New().String(),
+		BaseDir:       "/work/tmp",
+	}
+
+	//
+	hostOptions := buildWorkerOptions(ctx, logger)
+	hostOptions.EnableSessionWorker = true
+	hostWorker := worker.New(serviceClient, workDirActivity.HostTaskQueue, hostOptions)
+	hostWorker.RegisterActivityWithOptions(workDirActivity.CleanupWorkDir, activity.RegisterOptions{
+		Name: "CleanupWorkDir",
+	})
+	// Given how the construct is done without handle error, use non-blocking start for this demo
+	err := hostWorker.Start()
+	if err != nil {
+		logger.Fatal("Unable to start host worker ", zap.Error(err))
+	}
+	// Shared Task Queue
+	options := buildWorkerOptions(ctx, logger)
+	options.EnableSessionWorker = true
+	options.MaxConcurrentWorkflowTaskExecutionSize = 1000 // minimum number allowed by Temporal
+	options.MaxConcurrentActivityExecutionSize = 1000  // to limit the number of (CPU intensive) process running concurrently
+	options.MaxConcurrentSessionExecutionSize = 100
+
+	w := worker.New(serviceClient, taskQueue, options)
+	runOD := &fileparameter.RunWorkflow{
+		ExecutionTimeout:        20 * time.Minute,
+		SessionCreationTimeout:  time.Minute,
+		SessionRetryInterval:    20 * time.Second,
+		SessionMaxAttempts:      20,
+		SessionHeartbeatTimeout: 30 * time.Second,
+	}
+
+	w.RegisterWorkflowWithOptions(
+		runOD.ProcessingWorkflow,
+		workflow.RegisterOptions{Name: "session-cpu"},
+	)
+
+	// struct method activities: some setup required
+	w.RegisterActivity(workDirActivity)
+	w.RegisterActivity(activities.ProcessData)
+	w.RegisterActivity(activities.GenerateData)
+	w.RegisterActivity(&activities.Upload{BlobStore: &activities.BlobStore{}})
+
 	return w
 }
 
